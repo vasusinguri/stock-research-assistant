@@ -10,11 +10,11 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Configure CORS middleware for security & frontend accessibility
+# Configure CORS middleware for security & global deployment accessibility
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,  # Set to False when using wildcard '*' for browser compatibility
     allow_methods=["*"],
     allow_headers=["*"],
 )

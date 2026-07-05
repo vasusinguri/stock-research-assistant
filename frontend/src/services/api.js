@@ -3,7 +3,12 @@
  * Dynamically supports production Cloud URL (VITE_API_BASE_URL) or local Vite proxy fallback (/api/v1).
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+let rawBase = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+if (rawBase.startsWith('http') && !rawBase.endsWith('/api/v1')) {
+  rawBase = rawBase.replace(/\/+$/, '') + '/api/v1';
+}
+
+const API_BASE_URL = rawBase;
 
 /**
  * Check backend health status
