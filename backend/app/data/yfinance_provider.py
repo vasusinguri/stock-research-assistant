@@ -1,6 +1,7 @@
 import requests
 import yfinance as yf
-from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Tuple
 from app.data.base import BaseStockDataProvider
 from app.schemas.stock import StockSearchResult, StockBasicInfo, StockFundamentalsResponse
 from app.engine.metrics import (
@@ -28,6 +29,30 @@ TICKER_ALIAS_HINTS = {
 }
 
 
+def is_indian_market_open() -> Tuple[bool, str]:
+    """
+    Check if Indian Stock Exchanges (NSE / BSE) are currently open for regular trading.
+    NSE/BSE Hours: Mon-Fri, 9:15 AM to 3:30 PM IST (UTC + 5:30).
+    """
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    
+    # Check weekday (Monday = 0, Sunday = 6)
+    weekday = ist_now.weekday()
+    if weekday >= 5:  # Saturday or Sunday
+        return False, "CLOSED"
+
+    current_minutes = ist_now.hour * 60 + ist_now.minute
+    open_minutes = 9 * 60 + 15    # 09:15 AM IST
+    close_minutes = 15 * 60 + 30  # 03:30 PM IST
+
+    if open_minutes <= current_minutes <= close_minutes:
+        return True, "REGULAR"
+    elif 9 * 60 <= current_minutes < 9 * 60 + 15:
+        return False, "PRE"
+    else:
+        return False, "CLOSED"
+
+
 class YFinanceProvider(BaseStockDataProvider):
     """
     Yahoo Finance online data provider implementation of BaseStockDataProvider.
@@ -46,10 +71,8 @@ class YFinanceProvider(BaseStockDataProvider):
         results: List[StockSearchResult] = []
         seen_symbols = set()
 
-        # Build list of query variants for high precision search resolution
         search_queries = [query_clean]
 
-        # Add alias hint for common ticker prefix searches (e.g. 'rel' -> RELIANCE.NS, 'info' -> INFY.NS)
         if query_clean in TICKER_ALIAS_HINTS:
             hint_symbol = TICKER_ALIAS_HINTS[query_clean]
             search_queries.insert(0, f"{hint_symbol}.NS")
@@ -78,7 +101,6 @@ class YFinanceProvider(BaseStockDataProvider):
                     quote_type = item.get("quoteType", "")
                     exch = item.get("exchange", "")
 
-                    # Filter for Indian Equity assets (.NS or .BO or NSI/BOM exchange)
                     is_indian = sym.endswith(".NS") or sym.endswith(".BO") or exch in ("NSI", "BOM", "NSE", "BSE")
                     is_equity = quote_type in ("EQUITY", "ETF", "MUTUALFUND")
 
@@ -95,7 +117,6 @@ class YFinanceProvider(BaseStockDataProvider):
                             industry=item.get("industry")
                         ))
             except Exception as e:
-                # Log network error gracefully without crashing
                 print(f"Error fetching online search results for '{search_term}': {e}")
                 continue
 
@@ -103,7 +124,7 @@ class YFinanceProvider(BaseStockDataProvider):
 
     async def get_stock_info(self, symbol: str) -> Optional[StockBasicInfo]:
         """
-        Fetch company basic profile and real-time market data via yfinance.
+        Fetch company basic profile and real-time market data via yfinance fast_info and info.
         """
         clean_symbol = symbol.strip().upper()
         if not (clean_symbol.endswith(".NS") or clean_symbol.endswith(".BO") or "." in clean_symbol):
@@ -111,17 +132,49 @@ class YFinanceProvider(BaseStockDataProvider):
 
         try:
             ticker = yf.Ticker(clean_symbol)
-            info = ticker.info
+            
+            # Sub-50ms fast price retrieval
+            fast_info = {}
+            try:
+                fast_info = ticker.fast_info
+            except Exception:
+                pass
+
+            info = {}
+            try:
+                info = ticker.info
+            except Exception:
+                pass
 
             if not info or len(info) <= 5:
                 if clean_symbol.endswith(".NS"):
                     clean_symbol = clean_symbol.replace(".NS", ".BO")
                     ticker = yf.Ticker(clean_symbol)
-                    info = ticker.info
+                    try:
+                        fast_info = ticker.fast_info
+                    except Exception:
+                        pass
+                    try:
+                        info = ticker.info
+                    except Exception:
+                        pass
 
-            current_price = info.get("currentPrice") or info.get("regularMarketPrice")
-            previous_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
-            
+            current_price = (
+                fast_info.get("lastPrice")
+                or info.get("currentPrice")
+                or info.get("regularMarketPrice")
+            )
+            if current_price:
+                current_price = round(current_price, 2)
+
+            previous_close = (
+                fast_info.get("previousClose")
+                or info.get("previousClose")
+                or info.get("regularMarketPreviousClose")
+            )
+            if previous_close:
+                previous_close = round(previous_close, 2)
+
             price_change = None
             price_change_percent = None
             if current_price and previous_close:
@@ -129,6 +182,8 @@ class YFinanceProvider(BaseStockDataProvider):
                 price_change_percent = round((price_change / previous_close) * 100, 2)
 
             name = info.get("longName") or info.get("shortName") or clean_symbol
+            is_open, market_state = is_indian_market_open()
+            last_updated_str = datetime.now(timezone.utc).isoformat()
 
             return StockBasicInfo(
                 symbol=clean_symbol,
@@ -139,16 +194,19 @@ class YFinanceProvider(BaseStockDataProvider):
                 previous_close=previous_close,
                 price_change=price_change,
                 price_change_percent=price_change_percent,
-                market_cap=info.get("marketCap"),
+                market_cap=fast_info.get("marketCap") or info.get("marketCap"),
                 pe_ratio=info.get("trailingPE"),
                 pb_ratio=info.get("priceToBook"),
                 dividend_yield=round(info["dividendYield"] * 100, 2) if info.get("dividendYield") else None,
-                fifty_two_week_high=info.get("fiftyTwoWeekHigh"),
-                fifty_two_week_low=info.get("fiftyTwoWeekLow"),
+                fifty_two_week_high=fast_info.get("yearHigh") or info.get("fiftyTwoWeekHigh"),
+                fifty_two_week_low=fast_info.get("yearLow") or info.get("fiftyTwoWeekLow"),
                 sector=info.get("sector"),
                 industry=info.get("industry"),
                 summary=info.get("longBusinessSummary"),
-                website=info.get("website")
+                website=info.get("website"),
+                is_market_open=is_open,
+                market_state=market_state,
+                last_updated=last_updated_str
             )
         except Exception as e:
             print(f"Error fetching stock info for {clean_symbol}: {e}")

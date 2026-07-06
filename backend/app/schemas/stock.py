@@ -24,7 +24,7 @@ class StockSearchResponse(BaseModel):
 
 class StockBasicInfo(BaseModel):
     """
-    Schema for basic stock information and high-level company profile.
+    Schema for basic stock information and real-time market quote data.
     """
     symbol: str
     name: str
@@ -44,6 +44,9 @@ class StockBasicInfo(BaseModel):
     industry: Optional[str] = None
     summary: Optional[str] = None
     website: Optional[str] = None
+    is_market_open: bool = Field(default=False, description="Whether Indian Stock Exchange is currently open")
+    market_state: Optional[str] = Field(default="CLOSED", description="Market status (REGULAR, CLOSED, PRE)")
+    last_updated: Optional[str] = Field(default=None, description="ISO timestamp of last price quote update")
 
 
 class FinancialRatios(BaseModel):

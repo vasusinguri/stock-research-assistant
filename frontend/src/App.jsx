@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { 
   TrendingUp, Activity, ShieldCheck, Layers, Cpu, Server, 
   Search, ExternalLink, ArrowUpRight, ArrowDownRight, Globe, BarChart3, PieChart as PieChartIcon, Info,
-  Percent, Scale, TrendingDown, Users, DollarSign, Award, CheckCircle2, AlertCircle, Sparkles, Bot
+  Percent, Scale, TrendingDown, Users, DollarSign, Award, CheckCircle2, AlertCircle, Sparkles, Bot, Zap, RefreshCw
 } from 'lucide-react';
 import { 
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid
 } from 'recharts';
-import { checkBackendHealth, fetchStockFundamentals } from './services/api';
+import { checkBackendHealth, fetchStockFundamentals, fetchStockInfo } from './services/api';
 import StockSearch from './components/StockSearch';
 import AIAssistant from './components/AIAssistant';
 
@@ -19,6 +19,11 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'ai' | 'health' | 'ratios' | 'growth' | 'shareholding' | 'sector'
+  
+  // Real-Time Price Polling & Fluctuation States
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [priceFlash, setPriceFlash] = useState(null); // 'up' | 'down' | null
+  const [lastRefreshedTime, setLastRefreshedTime] = useState(null);
 
   useEffect(() => {
     checkBackendHealth()
@@ -32,6 +37,7 @@ export default function App() {
     try {
       const data = await fetchStockFundamentals(symbol);
       setFundamentals(data);
+      setLastRefreshedTime(new Date().toLocaleTimeString('en-IN'));
     } catch (err) {
       setError(`Failed to load fundamental analysis for ${symbol}. Please verify ticker and retry.`);
     } finally {
@@ -44,6 +50,52 @@ export default function App() {
       loadStockData(selectedStockSymbol);
     }
   }, [selectedStockSymbol]);
+
+  // Real-Time Live Market Price Polling Loop (Every 10 Seconds)
+  useEffect(() => {
+    if (!selectedStockSymbol || !autoRefresh) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const latestInfo = await fetchStockInfo(selectedStockSymbol);
+        if (latestInfo && latestInfo.current_price) {
+          setFundamentals((prev) => {
+            if (!prev || !prev.info) return prev;
+            const oldPrice = prev.info.current_price;
+            const newPrice = latestInfo.current_price;
+
+            if (oldPrice && newPrice !== oldPrice) {
+              if (newPrice > oldPrice) {
+                setPriceFlash('up');
+              } else if (newPrice < oldPrice) {
+                setPriceFlash('down');
+              }
+              setTimeout(() => setPriceFlash(null), 1500);
+            }
+
+            return {
+              ...prev,
+              info: {
+                ...prev.info,
+                current_price: latestInfo.current_price,
+                previous_close: latestInfo.previous_close,
+                price_change: latestInfo.price_change,
+                price_change_percent: latestInfo.price_change_percent,
+                is_market_open: latestInfo.is_market_open,
+                market_state: latestInfo.market_state,
+                last_updated: latestInfo.last_updated,
+              }
+            };
+          });
+          setLastRefreshedTime(new Date().toLocaleTimeString('en-IN'));
+        }
+      } catch (err) {
+        console.error('Auto-refresh price polling error:', err);
+      }
+    }, 10000);
+
+    return () => clearInterval(intervalId);
+  }, [selectedStockSymbol, autoRefresh]);
 
   const formatIndianMarketCap = (marketCap) => {
     if (!marketCap) return 'N/A';
@@ -83,13 +135,30 @@ export default function App() {
             <span>FinResearch AI <span style={{ fontSize: '0.75rem', color: 'var(--primary-400)', fontWeight: 600 }}>[IN]</span></span>
           </a>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Status:</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div className={`status-dot ${healthStatus?.status === 'healthy' ? 'online' : 'offline'}`} />
-              <span style={{ fontSize: '0.875rem', fontWeight: 600, color: healthStatus?.status === 'healthy' ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                {healthStatus?.status === 'healthy' ? 'System Operational' : 'Connecting...'}
-              </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {info && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {info.is_market_open ? (
+                  <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }} />
+                    🔴 LIVE | Market Open (NSE/BSE)
+                  </span>
+                ) : (
+                  <span className="badge" style={{ background: 'var(--bg-input)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontSize: '0.75rem' }}>
+                    ⚪ Market Closed (IST)
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Status:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className={`status-dot ${healthStatus?.status === 'healthy' ? 'online' : 'offline'}`} />
+                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: healthStatus?.status === 'healthy' ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                  {healthStatus?.status === 'healthy' ? 'System Operational' : 'Connecting...'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -129,7 +198,7 @@ export default function App() {
             <div className="glass-card" style={{ padding: '2rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', flexWrap: 'wrap' }}>
                     <h2 style={{ fontSize: '1.75rem', fontWeight: 700 }}>{info.name}</h2>
                     <span className="badge badge-success">{info.exchange}</span>
                     {healthScore && (
@@ -138,23 +207,36 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--text-secondary)', fontSize: '0.9rem', flexWrap: 'wrap' }}>
                     <code style={{ color: 'var(--primary-400)', fontWeight: 600 }}>{info.symbol}</code>
                     {info.sector && <span>• Sector: <strong>{info.sector}</strong></span>}
                     {info.industry && <span>• Industry: <strong>{info.industry}</strong></span>}
                   </div>
                 </div>
 
-                {/* Price Display */}
+                {/* Price Display & Live Fluctuation Indicator */}
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  <div 
+                    style={{ 
+                      fontSize: '2rem', 
+                      fontWeight: 800, 
+                      color: priceFlash === 'up' ? '#10b981' : priceFlash === 'down' ? '#ef4444' : 'var(--text-primary)',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: priceFlash === 'up' ? 'rgba(16, 185, 129, 0.2)' : priceFlash === 'down' ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
+                      transition: 'all 0.3s ease',
+                      display: 'inline-block'
+                    }}
+                  >
                     ₹ {info.current_price?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) || 'N/A'}
                   </div>
+
                   {info.price_change !== null && info.price_change !== undefined && (
                     <div 
                       style={{ 
-                        display: 'inline-flex', 
+                        display: 'flex', 
                         alignItems: 'center', 
+                        justifyContent: 'flex-end',
                         gap: '4px', 
                         fontWeight: 700, 
                         fontSize: '0.95rem',
@@ -166,6 +248,36 @@ export default function App() {
                       <span>{info.price_change > 0 ? '+' : ''}{info.price_change} ({info.price_change_percent}%)</span>
                     </div>
                   )}
+
+                  {/* Real-time Polling Controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+                    <button
+                      onClick={() => setAutoRefresh(!autoRefresh)}
+                      style={{
+                        background: autoRefresh ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-input)',
+                        color: autoRefresh ? 'var(--accent-green)' : 'var(--text-muted)',
+                        border: '1px solid',
+                        borderColor: autoRefresh ? 'var(--accent-green)' : 'var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 8px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        transition: 'all 0.2s ease'
+                      }}
+                      title="Toggle 10-second automatic live price refresh"
+                    >
+                      <Zap size={12} /> {autoRefresh ? 'Live Auto-Refresh ON (10s)' : 'Live Refresh OFF'}
+                    </button>
+                    {lastRefreshedTime && (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Updated {lastRefreshedTime}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -248,7 +360,34 @@ export default function App() {
                     <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Dividend Yield</span>
                       <div style={{ fontSize: '1.2rem', fontWeight: 700, marginTop: '6px', color: 'var(--accent-green)' }}>
-                        {info.dividend_yield ? `${info.dividend_yield}%` : 'N/A'}
+                        {info.dividend_yield ? `${info.dividend_yield.toFixed(2)} %` : 'N/A'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginTop: '1.25rem' }}>
+                    <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>52-Week High</span>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '6px', color: 'var(--accent-green)' }}>
+                        ₹ {info.fifty_two_week_high?.toLocaleString('en-IN') || 'N/A'}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>52-Week Low</span>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '6px', color: 'var(--accent-red)' }}>
+                        ₹ {info.fifty_two_week_low?.toLocaleString('en-IN') || 'N/A'}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Previous Close</span>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '6px' }}>
+                        ₹ {info.previous_close?.toLocaleString('en-IN') || 'N/A'}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Currency</span>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '6px', color: 'var(--primary-400)' }}>
+                        {info.currency}
                       </div>
                     </div>
                   </div>
@@ -256,16 +395,22 @@ export default function App() {
 
                 {info.summary && (
                   <div className="glass-card" style={{ padding: '2rem' }}>
-                    <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Info size={20} style={{ color: 'var(--primary-400)' }} /> Business Model & Operations
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem' }}>
+                      Business Profile & Summary
                     </h3>
                     <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '0.95rem' }}>
                       {info.summary}
                     </p>
                     {info.website && (
-                      <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}>
-                        <a href={info.website} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary-400)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.875rem', fontWeight: 600 }}>
-                          <Globe size={16} /> Official Corporate Website <ExternalLink size={14} />
+                      <div style={{ marginTop: '1.25rem' }}>
+                        <a 
+                          href={info.website} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="button button-outline"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}
+                        >
+                          <Globe size={14} /> Official Corporate Website <ExternalLink size={12} />
                         </a>
                       </div>
                     )}
@@ -276,66 +421,79 @@ export default function App() {
 
             {/* TAB: AI ASSISTANT */}
             {activeTab === 'ai' && (
-              <AIAssistant symbol={info.symbol} stockName={info.name} />
+              <AIAssistant symbol={info.symbol} companyName={info.name} />
             )}
 
-            {/* TAB: FINANCIAL HEALTH SCORE */}
+            {/* TAB: HEALTH SCORE */}
             {activeTab === 'health' && healthScore && (
               <div className="glass-card" style={{ padding: '2rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '2rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '1.5rem' }}>
-                  <div>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Algorithm Output</span>
-                    <h3 style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '2px' }}>Financial Health Score</h3>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '4px' }}>{healthScore.summary}</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', marginBottom: '2rem' }}>
+                  <div 
+                    style={{ 
+                      width: '90px', 
+                      height: '90px', 
+                      borderRadius: '50%', 
+                      background: healthScore.score >= 75 ? 'rgba(16, 185, 129, 0.15)' : healthScore.score >= 55 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      border: '3px solid',
+                      borderColor: healthScore.score >= 75 ? 'var(--accent-green)' : healthScore.score >= 55 ? 'var(--accent-amber)' : 'var(--accent-red)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <span style={{ fontSize: '1.75rem', fontWeight: 800 }}>{healthScore.score}</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>out of 100</span>
                   </div>
-
-                  <div style={{ background: 'var(--bg-input)', padding: '1.25rem 2rem', borderRadius: 'var(--radius-lg)', textAlign: 'center', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ fontSize: '2.5rem', fontWeight: 900, color: healthScore.score >= 75 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
-                      {healthScore.score}<span style={{ fontSize: '1.2rem', color: 'var(--text-muted)' }}>/100</span>
-                    </div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--primary-400)' }}>Grade {healthScore.grade} • {healthScore.status}</div>
+                  <div>
+                    <h3 style={{ fontSize: '1.3rem', fontWeight: 700 }}>
+                      Financial Health Grade: <span style={{ color: 'var(--primary-400)' }}>{healthScore.grade}</span> ({healthScore.status})
+                    </h3>
+                    <p style={{ color: 'var(--text-secondary)', marginTop: '6px', fontSize: '0.95rem' }}>
+                      {healthScore.summary}
+                    </p>
                   </div>
                 </div>
 
-                <h4 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1.25rem', color: 'var(--text-secondary)' }}>4-Pillar Score Breakdown:</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem' }}>
+                <h4 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem' }}>4-Pillar Score Breakdown:</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px' }}>
-                      <span>Solvency Risk</span>
-                      <span>{healthScore.solvency_score} / 30 pts</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>1. Solvency & Debt Health</span>
+                      <span style={{ fontWeight: 700, color: 'var(--primary-400)' }}>{healthScore.solvency_score} / 30</span>
                     </div>
-                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ width: `${(healthScore.solvency_score / 30) * 100}%`, height: '100%', background: 'var(--accent-green)' }} />
+                    <div style={{ width: '100%', background: 'var(--bg-card)', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ width: `${(healthScore.solvency_score / 30) * 100}%`, background: 'var(--primary-500)', height: '100%' }} />
                     </div>
                   </div>
 
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px' }}>
-                      <span>Profitability & ROE</span>
-                      <span>{healthScore.profitability_score} / 30 pts</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>2. Profitability (ROE/ROCE)</span>
+                      <span style={{ fontWeight: 700, color: 'var(--accent-green)' }}>{healthScore.profitability_score} / 30</span>
                     </div>
-                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ width: `${(healthScore.profitability_score / 30) * 100}%`, height: '100%', background: 'var(--primary-400)' }} />
-                    </div>
-                  </div>
-
-                  <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px' }}>
-                      <span>Revenue/Profit Growth</span>
-                      <span>{healthScore.growth_score} / 20 pts</span>
-                    </div>
-                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ width: `${(healthScore.growth_score / 20) * 100}%`, height: '100%', background: '#a78bfa' }} />
+                    <div style={{ width: '100%', background: 'var(--bg-card)', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ width: `${(healthScore.profitability_score / 30) * 100}%`, background: 'var(--accent-green)', height: '100%' }} />
                     </div>
                   </div>
 
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 600, marginBottom: '6px' }}>
-                      <span>Valuation Fair Value</span>
-                      <span>{healthScore.valuation_score} / 20 pts</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>3. 3-Year CAGR Growth</span>
+                      <span style={{ fontWeight: 700, color: '#a78bfa' }}>{healthScore.growth_score} / 25</span>
                     </div>
-                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ width: `${(healthScore.valuation_score / 20) * 100}%`, height: '100%', background: 'var(--accent-amber)' }} />
+                    <div style={{ width: '100%', background: 'var(--bg-card)', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ width: `${(healthScore.growth_score / 25) * 100}%`, background: '#a78bfa', height: '100%' }} />
+                    </div>
+                  </div>
+
+                  <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>4. Valuation (P/E & P/B)</span>
+                      <span style={{ fontWeight: 700, color: 'var(--accent-amber)' }}>{healthScore.valuation_score} / 15</span>
+                    </div>
+                    <div style={{ width: '100%', background: 'var(--bg-card)', height: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ width: `${(healthScore.valuation_score / 15) * 100}%`, background: 'var(--accent-amber)', height: '100%' }} />
                     </div>
                   </div>
                 </div>
@@ -345,38 +503,48 @@ export default function App() {
             {/* TAB: KEY RATIOS */}
             {activeTab === 'ratios' && ratios && (
               <div className="glass-card" style={{ padding: '2rem' }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.5rem' }}>Solvency & Profitability Ratios</h3>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.25rem' }}>
+                  Solvency & Profitability Metrics
+                </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Debt to Equity</span>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '6px', color: ratios.debt_to_equity < 0.5 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
-                      {ratios.debt_to_equity !== null ? ratios.debt_to_equity : 'N/A'}
+                    <div style={{ fontSize: '1.3rem', fontWeight: 700, marginTop: '6px', color: (ratios.debt_to_equity || 0) < 0.5 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                      {ratios.debt_to_equity !== null ? ratios.debt_to_equity.toFixed(2) : 'N/A'}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Solvency Status: {ratios.solvency_status}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      {(ratios.debt_to_equity || 0) < 0.5 ? '✓ Low Financial Leverage' : 'Moderate Leverage'}
+                    </span>
                   </div>
 
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>ROE (%)</span>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '6px', color: 'var(--accent-green)' }}>
-                      {ratios.roe ? `${ratios.roe}%` : 'N/A'}
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Return on Equity (ROE)</span>
+                    <div style={{ fontSize: '1.3rem', fontWeight: 700, marginTop: '6px', color: 'var(--accent-green)' }}>
+                      {ratios.roe !== null ? `${ratios.roe.toFixed(2)} %` : 'N/A'}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Return on Equity</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      Target: &gt; 15%
+                    </span>
                   </div>
 
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>ROCE (%)</span>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '6px', color: 'var(--primary-400)' }}>
-                      {ratios.roce ? `${ratios.roce}%` : 'N/A'}
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>ROCE</span>
+                    <div style={{ fontSize: '1.3rem', fontWeight: 700, marginTop: '6px', color: 'var(--primary-400)' }}>
+                      {ratios.roce !== null ? `${ratios.roce.toFixed(2)} %` : 'N/A'}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Return on Capital Employed</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      Target: &gt; 15%
+                    </span>
                   </div>
 
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Operating Margin (OPM)</span>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '6px' }}>
-                      {ratios.opm ? `${ratios.opm}%` : 'N/A'}
+                    <div style={{ fontSize: '1.3rem', fontWeight: 700, marginTop: '6px' }}>
+                      {ratios.opm !== null ? `${ratios.opm.toFixed(2)} %` : 'N/A'}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Core business margin</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      Core Operating Efficiency
+                    </span>
                   </div>
                 </div>
               </div>
@@ -385,83 +553,92 @@ export default function App() {
             {/* TAB: GROWTH CAGR */}
             {activeTab === 'growth' && growth && (
               <div className="glass-card" style={{ padding: '2rem' }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.5rem' }}>3-Year Compound Annual Growth (CAGR)</h3>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.25rem' }}>
+                  Multi-Year Growth & Compounding Performance
+                </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>3-Yr Revenue CAGR</span>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '6px', color: 'var(--primary-400)' }}>
-                      {growth.revenue_cagr_3yr !== null ? `${growth.revenue_cagr_3yr}%` : 'N/A'}
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>3-Year Revenue CAGR</span>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, marginTop: '6px', color: 'var(--primary-400)' }}>
+                      {growth.revenue_cagr_3yr !== null ? `${growth.revenue_cagr_3yr.toFixed(2)} %` : 'N/A'}
                     </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      Long-term Topline Expansion
+                    </span>
                   </div>
+
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>3-Yr Profit CAGR</span>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '6px', color: 'var(--accent-green)' }}>
-                      {growth.profit_cagr_3yr !== null ? `${growth.profit_cagr_3yr}%` : 'N/A'}
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>3-Year Net Profit CAGR</span>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, marginTop: '6px', color: 'var(--accent-green)' }}>
+                      {growth.profit_cagr_3yr !== null ? `${growth.profit_cagr_3yr.toFixed(2)} %` : 'N/A'}
                     </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                      Long-term Bottomline Expansion
+                    </span>
                   </div>
+
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>YoY Revenue Growth</span>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: '6px' }}>
-                      {growth.revenue_growth_yoy !== null ? `${growth.revenue_growth_yoy}%` : 'N/A'}
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, marginTop: '6px' }}>
+                      {growth.revenue_growth_yoy !== null ? `${growth.revenue_growth_yoy.toFixed(2)} %` : 'N/A'}
                     </div>
                   </div>
+
                   <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>YoY Profit Growth</span>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: '6px' }}>
-                      {growth.profit_growth_yoy !== null ? `${growth.profit_growth_yoy}%` : 'N/A'}
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>YoY Net Profit Growth</span>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 700, marginTop: '6px' }}>
+                      {growth.profit_growth_yoy !== null ? `${growth.profit_growth_yoy.toFixed(2)} %` : 'N/A'}
                     </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* TAB: SHAREHOLDING */}
+            {/* TAB: SHAREHOLDING PATTERN */}
             {activeTab === 'shareholding' && shareholding && (
               <div className="glass-card" style={{ padding: '2rem' }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.5rem' }}>Shareholding Pattern Breakdown</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'center' }}>
-                  <div style={{ height: '300px', width: '100%' }}>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.25rem' }}>
+                  Institutional & Promoter Shareholding Pattern
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '2rem', alignItems: 'center' }}>
+                  <div style={{ height: '260px' }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
                           data={shareholdingChartData}
-                          dataKey="value"
-                          nameKey="name"
                           cx="50%"
                           cy="50%"
-                          innerRadius={65}
-                          outerRadius={95}
+                          innerRadius={60}
+                          outerRadius={90}
                           paddingAngle={4}
+                          dataKey="value"
                         >
                           {shareholdingChartData.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip 
-                          contentStyle={{ background: '#131b2e', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff' }}
-                          formatter={(value) => [`${value}%`, 'Holding']}
-                        />
+                        <Tooltip formatter={(value) => [`${value}%`, 'Holding']} />
                         <Legend />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: 'var(--radius-md)', borderLeft: '4px solid #3b82f6' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Promoter Holding</span>
-                      <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>{shareholding.promoter_holding}%</div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Promoter Holding</span>
+                      <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#3b82f6' }}>{shareholding.promoter_holding ? `${shareholding.promoter_holding}%` : 'N/A'}</span>
                     </div>
-                    <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: 'var(--radius-md)', borderLeft: '4px solid #10b981' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Foreign Institutional (FII)</span>
-                      <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent-green)' }}>{shareholding.fii_holding}%</div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Foreign Institutional (FII)</span>
+                      <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#10b981' }}>{shareholding.fii_holding ? `${shareholding.fii_holding}%` : 'N/A'}</span>
                     </div>
-                    <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: 'var(--radius-md)', borderLeft: '4px solid #a78bfa' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Domestic Institutional (DII)</span>
-                      <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#a78bfa' }}>{shareholding.dii_holding}%</div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Domestic Institutional (DII)</span>
+                      <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#a78bfa' }}>{shareholding.dii_holding ? `${shareholding.dii_holding}%` : 'N/A'}</span>
                     </div>
-                    <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: 'var(--radius-md)', borderLeft: '4px solid #f59e0b' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Public & Retail</span>
-                      <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>{shareholding.public_holding}%</div>
+                    <div style={{ background: 'var(--bg-input)', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Public & Retail</span>
+                      <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#f59e0b' }}>{shareholding.public_holding ? `${shareholding.public_holding}%` : 'N/A'}</span>
                     </div>
                   </div>
                 </div>
@@ -471,41 +648,25 @@ export default function App() {
             {/* TAB: SECTOR COMPARISON */}
             {activeTab === 'sector' && sectorComp && (
               <div className="glass-card" style={{ padding: '2rem' }}>
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <span className="badge badge-success" style={{ marginBottom: '6px' }}>{sectorComp.sector_name} Sector</span>
-                  <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Sector Peer Benchmarking</h3>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '4px' }}>
-                    Comparing valuation, ROE profitability, and leverage against {sectorComp.sector_name} sector averages.
-                  </p>
-                </div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+                  Peer Benchmarking: {info.name} vs {sectorComp.sector_name} Sector Average
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                  Compare company valuation, return on equity, and debt profile relative to industry peer averages.
+                </p>
 
-                <div style={{ height: '320px', width: '100%', marginBottom: '2rem' }}>
+                <div style={{ height: '300px', marginBottom: '1.5rem' }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={sectorChartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                      <XAxis dataKey="metric" stroke="#94a3b8" />
-                      <YAxis stroke="#94a3b8" />
-                      <Tooltip contentStyle={{ background: '#131b2e', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff' }} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                      <XAxis dataKey="metric" stroke="var(--text-secondary)" />
+                      <YAxis stroke="var(--text-secondary)" />
+                      <Tooltip formatter={(value) => [value.toFixed(2), 'Value']} />
                       <Legend />
                       <Bar dataKey="Company" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="SectorAvg" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="SectorAvg" fill="#a78bfa" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                  <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Valuation Comparison</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '4px', color: 'var(--primary-400)' }}>
-                      {sectorComp.pe_status}
-                    </div>
-                  </div>
-                  <div style={{ background: 'var(--bg-input)', padding: '1.25rem', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>ROE Performance</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '4px', color: 'var(--accent-green)' }}>
-                      {sectorComp.roe_status}
-                    </div>
-                  </div>
                 </div>
               </div>
             )}
@@ -514,9 +675,14 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer style={{ borderTop: '1px solid var(--border-subtle)', padding: '1.5rem 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-        <div className="container">
-          AI-Powered Indian Stock Research Assistant • Built for Long-Term Investor Education
+      <footer style={{ borderTop: '1px solid var(--border-subtle)', padding: '1.5rem 0', marginTop: '3rem', background: 'var(--bg-card)' }}>
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+          <div>
+            © {new Date().getFullYear()} FinResearch AI • Designed for Indian Stock Fundamental Analysis
+          </div>
+          <div>
+            Built with FastAPI, React, Recharts & Gemini AI
+          </div>
         </div>
       </footer>
     </div>
