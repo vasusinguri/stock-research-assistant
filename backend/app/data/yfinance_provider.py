@@ -1,7 +1,7 @@
+import requests
 import yfinance as yf
 from typing import List, Optional
 from app.data.base import BaseStockDataProvider
-from app.data.indian_stocks_db import INDIAN_STOCKS_REGISTRY
 from app.schemas.stock import StockSearchResult, StockBasicInfo, StockFundamentalsResponse
 from app.engine.metrics import (
     compute_financial_ratios,
@@ -12,52 +12,94 @@ from app.engine.health_score import calculate_financial_health_score
 from app.engine.sector_compare import compute_sector_comparison
 
 
+# Common Indian ticker alias map for fast prefix hints (e.g. 'rel' -> RELIANCE, 'info' -> INFY, 'hdf' -> HDFCBANK)
+TICKER_ALIAS_HINTS = {
+    'REL': 'RELIANCE',
+    'RELI': 'RELIANCE',
+    'INFO': 'INFY',
+    'INFOSYS': 'INFY',
+    'HDF': 'HDFCBANK',
+    'HDFC': 'HDFCBANK',
+    'TCS': 'TCS',
+    'WIPRO': 'WIPRO',
+    'ICICI': 'ICICIBANK',
+    'SBI': 'SBIN',
+    'TATA': 'TATAMOTORS',
+}
+
+
 class YFinanceProvider(BaseStockDataProvider):
     """
-    Yahoo Finance provider implementation of BaseStockDataProvider.
-    Handles Indian stock symbol formatting (.NS for NSE, .BO for BSE).
+    Yahoo Finance online data provider implementation of BaseStockDataProvider.
+    Provides live internet-based stock search and market data fetch for Indian stocks (.NS for NSE, .BO for BSE).
     """
 
     async def search_stocks(self, query: str) -> List[StockSearchResult]:
+        """
+        Fetch matching Indian stocks from online Yahoo Finance search API in real-time.
+        Case-insensitive autocomplete supporting NSE (.NS) and BSE (.BO) stocks.
+        """
         query_clean = query.strip().upper()
         if not query_clean:
             return []
 
-        matched_results = []
-        # 1. Search in curated Indian stock registry for instant sub-millisecond match
-        for stock in INDIAN_STOCKS_REGISTRY:
-            sym_raw = stock["symbol"].replace(".NS", "").replace(".BO", "")
-            if (query_clean in sym_raw) or (query_clean in stock["name"].upper()):
-                matched_results.append(StockSearchResult(
-                    symbol=stock["symbol"],
-                    name=stock["name"],
-                    exchange=stock["exchange"],
-                    sector=stock.get("sector"),
-                    industry=stock.get("industry")
-                ))
+        results: List[StockSearchResult] = []
+        seen_symbols = set()
 
-        # Limit local search results to top 10 matches
-        if matched_results:
-            return matched_results[:10]
+        # Build list of query variants for high precision search resolution
+        search_queries = [query_clean]
 
-        # 2. Fallback to yfinance ticker search if query isn't in local registry
-        try:
-            formatted_symbol = query_clean if ("." in query_clean) else f"{query_clean}.NS"
-            ticker = yf.Ticker(formatted_symbol)
-            info = ticker.info
-            if info and ("shortName" in info or "longName" in info):
-                name = info.get("longName") or info.get("shortName") or formatted_symbol
-                return [StockSearchResult(
-                    symbol=formatted_symbol,
-                    name=name,
-                    exchange="BSE" if formatted_symbol.endswith(".BO") else "NSE",
-                    sector=info.get("sector"),
-                    industry=info.get("industry")
-                )]
-        except Exception:
-            pass
+        # Add alias hint for common ticker prefix searches (e.g. 'rel' -> RELIANCE.NS, 'info' -> INFY.NS)
+        if query_clean in TICKER_ALIAS_HINTS:
+            hint_symbol = TICKER_ALIAS_HINTS[query_clean]
+            search_queries.insert(0, f"{hint_symbol}.NS")
+            search_queries.insert(1, hint_symbol)
 
-        return []
+        search_queries.append(f"{query_clean}.NS")
+        search_queries.append(f"{query_clean} India")
+
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+        for search_term in search_queries:
+            if len(results) >= 10:
+                break
+
+            url = f"https://query1.finance.yahoo.com/v1/finance/search?q={search_term}&quotesCount=15&newsCount=0&enableFuzzyQuery=true"
+            try:
+                response = requests.get(url, headers=headers, timeout=3)
+                if response.status_code != 200:
+                    continue
+
+                data = response.json()
+                quotes = data.get("quotes", [])
+
+                for item in quotes:
+                    sym = item.get("symbol", "").upper()
+                    quote_type = item.get("quoteType", "")
+                    exch = item.get("exchange", "")
+
+                    # Filter for Indian Equity assets (.NS or .BO or NSI/BOM exchange)
+                    is_indian = sym.endswith(".NS") or sym.endswith(".BO") or exch in ("NSI", "BOM", "NSE", "BSE")
+                    is_equity = quote_type in ("EQUITY", "ETF", "MUTUALFUND")
+
+                    if is_indian and is_equity and sym not in seen_symbols:
+                        seen_symbols.add(sym)
+                        name = item.get("longname") or item.get("shortname") or sym
+                        exchange_clean = "BSE" if (sym.endswith(".BO") or exch == "BOM") else "NSE"
+
+                        results.append(StockSearchResult(
+                            symbol=sym,
+                            name=name,
+                            exchange=exchange_clean,
+                            sector=item.get("sector") or item.get("industry") or "N/A",
+                            industry=item.get("industry")
+                        ))
+            except Exception as e:
+                # Log network error gracefully without crashing
+                print(f"Error fetching online search results for '{search_term}': {e}")
+                continue
+
+        return results[:10]
 
     async def get_stock_info(self, symbol: str) -> Optional[StockBasicInfo]:
         """
