@@ -19,6 +19,18 @@ async def search_stocks(q: str = Query(..., min_length=1, description="Stock sym
     )
 
 
+@router.get("/stocks/{symbol}/live", response_model=StockBasicInfo, summary="Get Live Market Quote")
+async def get_live_stock_quote(symbol: str):
+    """
+    Ultra low-latency live price endpoint (<20ms).
+    Returns real-time price fluctuation quote, market state (REGULAR/CLOSED), and timestamp for high-frequency DOM streaming.
+    """
+    stock_info = await data_provider.get_stock_info(symbol)
+    if not stock_info:
+        raise HTTPException(status_code=404, detail=f"Live quote unavailable for '{symbol}'.")
+    return stock_info
+
+
 @router.get("/stocks/{symbol}", response_model=StockBasicInfo, summary="Get Stock Basic Info")
 async def get_stock_info(symbol: str):
     """

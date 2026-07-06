@@ -8,7 +8,7 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid
 } from 'recharts';
-import { checkBackendHealth, fetchStockFundamentals, fetchStockInfo } from './services/api';
+import { checkBackendHealth, fetchStockFundamentals, fetchLiveStockPrice } from './services/api';
 import StockSearch from './components/StockSearch';
 import AIAssistant from './components/AIAssistant';
 
@@ -20,7 +20,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'ai' | 'health' | 'ratios' | 'growth' | 'shareholding' | 'sector'
   
-  // Real-Time Price Polling & Fluctuation States
+  // High-Frequency Real-Time Price Polling & Fluctuation States (INDmoney Style)
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [priceFlash, setPriceFlash] = useState(null); // 'up' | 'down' | null
   const [lastRefreshedTime, setLastRefreshedTime] = useState(null);
@@ -51,13 +51,13 @@ export default function App() {
     }
   }, [selectedStockSymbol]);
 
-  // Real-Time Live Market Price Polling Loop (Every 10 Seconds)
+  // High-Frequency 3-Second Real-Time Price Streaming Loop (INDmoney / Zerodha Ticker Style)
   useEffect(() => {
     if (!selectedStockSymbol || !autoRefresh) return;
 
     const intervalId = setInterval(async () => {
       try {
-        const latestInfo = await fetchStockInfo(selectedStockSymbol);
+        const latestInfo = await fetchLiveStockPrice(selectedStockSymbol);
         if (latestInfo && latestInfo.current_price) {
           setFundamentals((prev) => {
             if (!prev || !prev.info) return prev;
@@ -70,7 +70,7 @@ export default function App() {
               } else if (newPrice < oldPrice) {
                 setPriceFlash('down');
               }
-              setTimeout(() => setPriceFlash(null), 1500);
+              setTimeout(() => setPriceFlash(null), 1200);
             }
 
             return {
@@ -90,9 +90,9 @@ export default function App() {
           setLastRefreshedTime(new Date().toLocaleTimeString('en-IN'));
         }
       } catch (err) {
-        console.error('Auto-refresh price polling error:', err);
+        console.error('High-frequency live stream error:', err);
       }
-    }, 10000);
+    }, 3000); // 3-second live stream polling interval
 
     return () => clearInterval(intervalId);
   }, [selectedStockSymbol, autoRefresh]);
@@ -141,7 +141,7 @@ export default function App() {
                 {info.is_market_open ? (
                   <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem' }}>
                     <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981' }} />
-                    🔴 LIVE | Market Open (NSE/BSE)
+                    🔴 LIVE STREAMING | Market Open (NSE/BSE)
                   </span>
                 ) : (
                   <span className="badge" style={{ background: 'var(--bg-input)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontSize: '0.75rem' }}>
@@ -214,18 +214,23 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Price Display & Live Fluctuation Indicator */}
+                {/* INDmoney-Style High-Frequency Live Price Display & Tick Animation */}
                 <div style={{ textAlign: 'right' }}>
                   <div 
                     style={{ 
-                      fontSize: '2rem', 
+                      fontSize: '2.1rem', 
                       fontWeight: 800, 
                       color: priceFlash === 'up' ? '#10b981' : priceFlash === 'down' ? '#ef4444' : 'var(--text-primary)',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      background: priceFlash === 'up' ? 'rgba(16, 185, 129, 0.2)' : priceFlash === 'down' ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
-                      transition: 'all 0.3s ease',
-                      display: 'inline-block'
+                      padding: '4px 12px',
+                      borderRadius: 'var(--radius-md)',
+                      background: priceFlash === 'up' ? 'rgba(16, 185, 129, 0.25)' : priceFlash === 'down' ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.03)',
+                      border: '1px solid',
+                      borderColor: priceFlash === 'up' ? '#10b981' : priceFlash === 'down' ? '#ef4444' : 'var(--border-subtle)',
+                      transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      boxShadow: priceFlash === 'up' ? '0 0 16px rgba(16, 185, 129, 0.4)' : priceFlash === 'down' ? '0 0 16px rgba(239, 68, 68, 0.4)' : 'none'
                     }}
                   >
                     ₹ {info.current_price?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) || 'N/A'}
@@ -239,18 +244,18 @@ export default function App() {
                         justifyContent: 'flex-end',
                         gap: '4px', 
                         fontWeight: 700, 
-                        fontSize: '0.95rem',
+                        fontSize: '1rem',
                         color: info.price_change >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
-                        marginTop: '4px'
+                        marginTop: '6px'
                       }}
                     >
-                      {info.price_change >= 0 ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
+                      {info.price_change >= 0 ? <ArrowUpRight size={20} /> : <ArrowDownRight size={20} />}
                       <span>{info.price_change > 0 ? '+' : ''}{info.price_change} ({info.price_change_percent}%)</span>
                     </div>
                   )}
 
-                  {/* Real-time Polling Controls */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+                  {/* Real-time Streaming Controls */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
                     <button
                       onClick={() => setAutoRefresh(!autoRefresh)}
                       style={{
@@ -259,22 +264,23 @@ export default function App() {
                         border: '1px solid',
                         borderColor: autoRefresh ? 'var(--accent-green)' : 'var(--border-subtle)',
                         borderRadius: 'var(--radius-sm)',
-                        padding: '4px 8px',
+                        padding: '4px 10px',
                         fontSize: '0.75rem',
                         fontWeight: 600,
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '4px',
+                        gap: '5px',
                         transition: 'all 0.2s ease'
                       }}
-                      title="Toggle 10-second automatic live price refresh"
+                      title="Toggle 3-second live price streaming"
                     >
-                      <Zap size={12} /> {autoRefresh ? 'Live Auto-Refresh ON (10s)' : 'Live Refresh OFF'}
+                      <Zap size={13} style={{ fill: autoRefresh ? 'var(--accent-green)' : 'none' }} /> 
+                      {autoRefresh ? 'LIVE Streaming 3s' : 'Stream Paused'}
                     </button>
                     {lastRefreshedTime && (
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                        Updated {lastRefreshedTime}
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        Tick: {lastRefreshedTime}
                       </span>
                     )}
                   </div>

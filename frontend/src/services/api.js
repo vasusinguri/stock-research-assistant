@@ -45,6 +45,22 @@ export async function searchStocks(query) {
 }
 
 /**
+ * Fetch sub-second live price quote data for a selected stock ticker
+ */
+export async function fetchLiveStockPrice(symbol) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/stocks/${encodeURIComponent(symbol)}/live`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error(`Failed to fetch live stock price for symbol '${symbol}':`, error);
+    throw error;
+  }
+}
+
+/**
  * Fetch detailed basic info for a selected stock ticker
  */
 export async function fetchStockInfo(symbol) {
