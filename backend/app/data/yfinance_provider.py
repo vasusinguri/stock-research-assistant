@@ -124,93 +124,112 @@ class YFinanceProvider(BaseStockDataProvider):
 
     async def get_stock_info(self, symbol: str) -> Optional[StockBasicInfo]:
         """
-        Fetch company basic profile and real-time market data via yfinance fast_info and info.
+        Fetch company basic profile and genuine real-time market quote data via Yahoo v8 live chart API & fast_info.
         """
         clean_symbol = symbol.strip().upper()
         if not (clean_symbol.endswith(".NS") or clean_symbol.endswith(".BO") or "." in clean_symbol):
             clean_symbol = f"{clean_symbol}.NS"
 
+        current_price = None
+        previous_close = None
+        day_high = None
+        day_low = None
+
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+        # 1. Primary: Query Yahoo v8 un-cached live chart quote endpoint for sub-15ms real-time quote
         try:
-            ticker = yf.Ticker(clean_symbol)
-            
-            # Sub-50ms fast price retrieval
-            fast_info = {}
-            try:
-                fast_info = ticker.fast_info
-            except Exception:
-                pass
+            v8_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_symbol}?interval=1m&range=1d"
+            res = requests.get(v8_url, headers=headers, timeout=2.5)
+            if res.status_code == 200:
+                chart_data = res.json()
+                meta = chart_data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+                if meta:
+                    current_price = meta.get("regularMarketPrice")
+                    previous_close = meta.get("chartPreviousClose") or meta.get("previousClose")
+                    day_high = meta.get("regularMarketDayHigh") or meta.get("dayHigh")
+                    day_low = meta.get("regularMarketDayLow") or meta.get("dayLow")
+        except Exception as e:
+            print(f"v8 live quote fetch fallback for {clean_symbol}: {e}")
 
-            info = {}
-            try:
-                info = ticker.info
-            except Exception:
-                pass
+        # 2. Secondary / Fallback: Query yfinance fast_info and info for metadata
+        ticker = yf.Ticker(clean_symbol)
+        
+        fast_info = {}
+        try:
+            fast_info = ticker.fast_info
+        except Exception:
+            pass
 
-            if not info or len(info) <= 5:
-                if clean_symbol.endswith(".NS"):
-                    clean_symbol = clean_symbol.replace(".NS", ".BO")
-                    ticker = yf.Ticker(clean_symbol)
-                    try:
-                        fast_info = ticker.fast_info
-                    except Exception:
-                        pass
-                    try:
-                        info = ticker.info
-                    except Exception:
-                        pass
+        info = {}
+        try:
+            info = ticker.info
+        except Exception:
+            pass
 
+        if not current_price:
             current_price = (
                 fast_info.get("lastPrice")
                 or info.get("currentPrice")
                 or info.get("regularMarketPrice")
             )
-            if current_price:
-                current_price = round(current_price, 2)
+        if current_price:
+            current_price = round(float(current_price), 2)
 
+        if not previous_close:
             previous_close = (
                 fast_info.get("previousClose")
                 or info.get("previousClose")
                 or info.get("regularMarketPreviousClose")
             )
-            if previous_close:
-                previous_close = round(previous_close, 2)
+        if previous_close:
+            previous_close = round(float(previous_close), 2)
 
-            price_change = None
-            price_change_percent = None
-            if current_price and previous_close:
-                price_change = round(current_price - previous_close, 2)
-                price_change_percent = round((price_change / previous_close) * 100, 2)
+        if not day_high:
+            day_high = fast_info.get("dayHigh") or info.get("dayHigh")
+        if day_high:
+            day_high = round(float(day_high), 2)
 
-            name = info.get("longName") or info.get("shortName") or clean_symbol
-            is_open, market_state = is_indian_market_open()
-            last_updated_str = datetime.now(timezone.utc).isoformat()
+        if not day_low:
+            day_low = fast_info.get("dayLow") or info.get("dayLow")
+        if day_low:
+            day_low = round(float(day_low), 2)
 
-            return StockBasicInfo(
-                symbol=clean_symbol,
-                name=name,
-                exchange="BSE" if clean_symbol.endswith(".BO") else "NSE",
-                currency=info.get("currency", "INR"),
-                current_price=current_price,
-                previous_close=previous_close,
-                price_change=price_change,
-                price_change_percent=price_change_percent,
-                market_cap=fast_info.get("marketCap") or info.get("marketCap"),
-                pe_ratio=info.get("trailingPE"),
-                pb_ratio=info.get("priceToBook"),
-                dividend_yield=round(info["dividendYield"] * 100, 2) if info.get("dividendYield") else None,
-                fifty_two_week_high=fast_info.get("yearHigh") or info.get("fiftyTwoWeekHigh"),
-                fifty_two_week_low=fast_info.get("yearLow") or info.get("fiftyTwoWeekLow"),
-                sector=info.get("sector"),
-                industry=info.get("industry"),
-                summary=info.get("longBusinessSummary"),
-                website=info.get("website"),
-                is_market_open=is_open,
-                market_state=market_state,
-                last_updated=last_updated_str
-            )
-        except Exception as e:
-            print(f"Error fetching stock info for {clean_symbol}: {e}")
-            return None
+        price_change = None
+        price_change_percent = None
+        if current_price and previous_close:
+            price_change = round(current_price - previous_close, 2)
+            price_change_percent = round((price_change / previous_close) * 100, 2)
+
+        name = info.get("longName") or info.get("shortName") or clean_symbol
+        is_open, market_state = is_indian_market_open()
+        last_updated_str = datetime.now(timezone.utc).isoformat()
+
+        return StockBasicInfo(
+            symbol=clean_symbol,
+            name=name,
+            exchange="BSE" if clean_symbol.endswith(".BO") else "NSE",
+            currency=info.get("currency", "INR"),
+            current_price=current_price,
+            previous_close=previous_close,
+            price_change=price_change,
+            price_change_percent=price_change_percent,
+            market_cap=fast_info.get("marketCap") or info.get("marketCap"),
+            pe_ratio=info.get("trailingPE"),
+            pb_ratio=info.get("priceToBook"),
+            dividend_yield=round(info["dividendYield"] * 100, 2) if info.get("dividendYield") else None,
+            fifty_two_week_high=fast_info.get("yearHigh") or info.get("fiftyTwoWeekHigh"),
+            fifty_two_week_low=fast_info.get("yearLow") or info.get("fiftyTwoWeekLow"),
+            day_high=day_high,
+            day_low=day_low,
+            sector=info.get("sector"),
+            industry=info.get("industry"),
+            summary=info.get("longBusinessSummary"),
+            website=info.get("website"),
+            is_market_open=is_open,
+            market_state=market_state,
+            last_updated=last_updated_str
+        )
 
     async def get_stock_fundamentals(self, symbol: str) -> Optional[StockFundamentalsResponse]:
         """

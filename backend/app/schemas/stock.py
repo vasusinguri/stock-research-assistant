@@ -40,6 +40,8 @@ class StockBasicInfo(BaseModel):
     dividend_yield: Optional[float] = None
     fifty_two_week_high: Optional[float] = None
     fifty_two_week_low: Optional[float] = None
+    day_high: Optional[float] = Field(default=None, description="Intraday Day High price")
+    day_low: Optional[float] = Field(default=None, description="Intraday Day Low price")
     sector: Optional[str] = None
     industry: Optional[str] = None
     summary: Optional[str] = None

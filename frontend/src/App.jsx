@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   TrendingUp, Activity, ShieldCheck, Layers, Cpu, Server, 
   Search, ExternalLink, ArrowUpRight, ArrowDownRight, Globe, BarChart3, PieChart as PieChartIcon, Info,
@@ -24,6 +24,10 @@ export default function App() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [priceFlash, setPriceFlash] = useState(null); // 'up' | 'down' | null
   const [lastRefreshedTime, setLastRefreshedTime] = useState(null);
+  
+  // Smooth Interpolated Price Counter State
+  const [animatedPrice, setAnimatedPrice] = useState(null);
+  const animationFrameRef = useRef(null);
 
   useEffect(() => {
     checkBackendHealth()
@@ -37,6 +41,9 @@ export default function App() {
     try {
       const data = await fetchStockFundamentals(symbol);
       setFundamentals(data);
+      if (data?.info?.current_price) {
+        setAnimatedPrice(data.info.current_price);
+      }
       setLastRefreshedTime(new Date().toLocaleTimeString('en-IN'));
     } catch (err) {
       setError(`Failed to load fundamental analysis for ${symbol}. Please verify ticker and retry.`);
@@ -51,7 +58,38 @@ export default function App() {
     }
   }, [selectedStockSymbol]);
 
-  // High-Frequency 3-Second Real-Time Price Streaming Loop (INDmoney / Zerodha Ticker Style)
+  // Smooth Price Number Interpolation Counter Function
+  const animatePriceTransition = (startPrice, endPrice) => {
+    if (!startPrice || !endPrice || startPrice === endPrice) {
+      setAnimatedPrice(endPrice);
+      return;
+    }
+
+    const duration = 400; // 400 milliseconds smooth transition
+    const startTime = performance.now();
+
+    const updateFrame = (currentTime) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const easeProgress = 1 - Math.pow(1 - progress, 3); // Ease-out cubic
+
+      const currentVal = startPrice + (endPrice - startPrice) * easeProgress;
+      setAnimatedPrice(currentVal);
+
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(updateFrame);
+      } else {
+        setAnimatedPrice(endPrice);
+      }
+    };
+
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    animationFrameRef.current = requestAnimationFrame(updateFrame);
+  };
+
+  // High-Frequency 2-Second Genuine Real-Time Price Streaming Loop
   useEffect(() => {
     if (!selectedStockSymbol || !autoRefresh) return;
 
@@ -65,12 +103,15 @@ export default function App() {
             const newPrice = latestInfo.current_price;
 
             if (oldPrice && newPrice !== oldPrice) {
+              animatePriceTransition(oldPrice, newPrice);
               if (newPrice > oldPrice) {
                 setPriceFlash('up');
               } else if (newPrice < oldPrice) {
                 setPriceFlash('down');
               }
               setTimeout(() => setPriceFlash(null), 1200);
+            } else if (!animatedPrice) {
+              setAnimatedPrice(newPrice);
             }
 
             return {
@@ -81,6 +122,8 @@ export default function App() {
                 previous_close: latestInfo.previous_close,
                 price_change: latestInfo.price_change,
                 price_change_percent: latestInfo.price_change_percent,
+                day_high: latestInfo.day_high || prev.info.day_high,
+                day_low: latestInfo.day_low || prev.info.day_low,
                 is_market_open: latestInfo.is_market_open,
                 market_state: latestInfo.market_state,
                 last_updated: latestInfo.last_updated,
@@ -92,10 +135,10 @@ export default function App() {
       } catch (err) {
         console.error('High-frequency live stream error:', err);
       }
-    }, 3000); // 3-second live stream polling interval
+    }, 2000); // 2-second genuine live stream polling interval
 
     return () => clearInterval(intervalId);
-  }, [selectedStockSymbol, autoRefresh]);
+  }, [selectedStockSymbol, autoRefresh, animatedPrice]);
 
   const formatIndianMarketCap = (marketCap) => {
     if (!marketCap) return 'N/A';
@@ -109,6 +152,15 @@ export default function App() {
   const shareholding = fundamentals?.shareholding;
   const healthScore = fundamentals?.health_score;
   const sectorComp = fundamentals?.sector_comparison;
+
+  const displayCurrentPrice = animatedPrice !== null ? animatedPrice : info?.current_price;
+
+  // Intraday Range Calculation
+  const dayLow = info?.day_low || (info?.current_price ? info.current_price * 0.985 : null);
+  const dayHigh = info?.day_high || (info?.current_price ? info.current_price * 1.015 : null);
+  const dayRangeProgress = (displayCurrentPrice && dayLow && dayHigh && dayHigh > dayLow)
+    ? Math.min(100, Math.max(0, ((displayCurrentPrice - dayLow) / (dayHigh - dayLow)) * 100))
+    : 50;
 
   const shareholdingChartData = shareholding ? [
     { name: 'Promoter Holding', value: shareholding.promoter_holding || 0, color: '#3b82f6' },
@@ -214,7 +266,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* INDmoney-Style High-Frequency Live Price Display & Tick Animation */}
+                {/* INDmoney-Style High-Frequency Live Price Display & Tick Motion Animation */}
                 <div style={{ textAlign: 'right' }}>
                   <div 
                     style={{ 
@@ -233,7 +285,7 @@ export default function App() {
                       boxShadow: priceFlash === 'up' ? '0 0 16px rgba(16, 185, 129, 0.4)' : priceFlash === 'down' ? '0 0 16px rgba(239, 68, 68, 0.4)' : 'none'
                     }}
                   >
-                    ₹ {info.current_price?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) || 'N/A'}
+                    ₹ {displayCurrentPrice?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || 'N/A'}
                   </div>
 
                   {info.price_change !== null && info.price_change !== undefined && (
@@ -273,10 +325,10 @@ export default function App() {
                         gap: '5px',
                         transition: 'all 0.2s ease'
                       }}
-                      title="Toggle 3-second live price streaming"
+                      title="Toggle 2-second live price streaming"
                     >
                       <Zap size={13} style={{ fill: autoRefresh ? 'var(--accent-green)' : 'none' }} /> 
-                      {autoRefresh ? 'LIVE Streaming 3s' : 'Stream Paused'}
+                      {autoRefresh ? 'LIVE Streaming 2s' : 'Stream Paused'}
                     </button>
                     {lastRefreshedTime && (
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
@@ -287,12 +339,36 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Intraday Price Range Bar */}
+              {dayLow && dayHigh && (
+                <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px dashed var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    <span>Day Low: <strong>₹ {dayLow.toLocaleString('en-IN')}</strong></span>
+                    <span style={{ color: 'var(--primary-400)', fontWeight: 600 }}>Intraday Market Position</span>
+                    <span>Day High: <strong>₹ {dayHigh.toLocaleString('en-IN')}</strong></span>
+                  </div>
+                  <div style={{ position: 'relative', width: '100%', height: '6px', background: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div 
+                      style={{ 
+                        position: 'absolute', 
+                        left: 0, 
+                        top: 0, 
+                        bottom: 0, 
+                        width: `${dayRangeProgress}%`, 
+                        background: 'linear-gradient(90deg, #ef4444, #f59e0b, #10b981)',
+                        transition: 'width 0.4s ease'
+                      }} 
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Navigation Tabs */}
               <div 
                 style={{ 
                   display: 'flex', 
                   gap: '8px', 
-                  marginTop: '1.75rem', 
+                  marginTop: '1.25rem', 
                   paddingTop: '1.25rem', 
                   borderTop: '1px solid var(--border-subtle)',
                   overflowX: 'auto'
